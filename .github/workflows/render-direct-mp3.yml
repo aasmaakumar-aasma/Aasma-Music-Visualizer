@@ -1,0 +1,44 @@
+name: Render Direct MP3
+
+on:
+  push:
+    paths:
+      - 'input_audio/*.mp3'
+      - 'input_audio/*.m4a'
+      - 'input_audio/*.wav'
+
+permissions:
+  contents: read
+
+jobs:
+  render-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ffmpeg and rclone
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg rclone
+
+      - name: Configure rclone from secret
+        env:
+          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf "%s\n" "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Render audio to waveform MP4
+        run: |
+          mkdir -p /tmp/aasma_out
+          AUDIO_FILE=$(ls -t input_audio/* | head -n 1)
+          BASE_NAME=$(basename "${AUDIO_FILE%.*}")
+          ffmpeg -y -i "$AUDIO_FILE" \
+            -filter_complex "[0:a]showwaves=s=1280x720:mode=cline:colors=00e5ff:rate=30,format=yuv420p[v]" \
+            -map "[v]" -map 0:a -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 192k -shortest \
+            "/tmp/aasma_out/${BASE_NAME}_visualizer.mp4"
+
+      - name: Upload video safely to Google Drive
+        run: |
+          rclone copy /tmp/aasma_out/ aasma_cloud:Aasma-Music-Visualizer/renders/
+          rclone ls aasma_cloud:Aasma-Music-Visualizer/renders/
