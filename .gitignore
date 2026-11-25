@@ -7,3 +7,9 @@ secrets.json
 *.mp4
 *.jpg
 *.png
+
+.config/
+rclone.conf
+
+.config/
+rclone.conf
