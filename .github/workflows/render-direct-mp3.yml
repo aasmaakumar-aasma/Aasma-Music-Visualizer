@@ -19,10 +19,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install ffmpeg, rclone, advanced fonts & Python libs
+      - name: Install ffmpeg, rclone, emoji fonts & Python libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg rclone fonts-lato fonts-dejavu-core fonts-noto-cjk python3-pip
+          sudo apt-get install -y ffmpeg rclone fonts-lato fonts-noto-color-emoji python3-pip
           pip install --break-system-packages google-genai pillow rembg onnxruntime numpy
 
       - name: Configure rclone from secret
@@ -33,16 +33,18 @@ jobs:
           printf "%s\n" "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
           chmod 600 ~/.config/rclone/rclone.conf
 
-      - name: Render Cinematic Pro Studio MP4
+      - name: Render Nature Studio v4 MP4 + HD Thumbnail
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          mkdir -p /tmp/aasma_out
+          mkdir -p /tmp/aasma_out /tmp/aasma_thumb
           AUDIO_FILE=$(ls -t input_audio/* | head -n 1)
           BASE_NAME=$(basename "${AUDIO_FILE%.*}")
-          python3 render_lyrics.py "$AUDIO_FILE" "/tmp/aasma_out/${BASE_NAME}_cinematic_v3.mp4"
+          python3 render_lyrics.py "$AUDIO_FILE" "/tmp/aasma_out/${BASE_NAME}_nature_v4.mp4" "/tmp/aasma_thumb/${BASE_NAME}_nature_v4.jpg"
 
-      - name: Upload video safely to Google Drive
+      - name: Upload video and thumbnail in matching sequence folders
         run: |
           rclone copy /tmp/aasma_out/ aasma_cloud:Aasma-Music-Visualizer/renders/
+          rclone copy /tmp/aasma_thumb/ aasma_cloud:Aasma-Music-Visualizer/thumbnails/
           rclone ls aasma_cloud:Aasma-Music-Visualizer/renders/
+          rclone ls aasma_cloud:Aasma-Music-Visualizer/thumbnails/

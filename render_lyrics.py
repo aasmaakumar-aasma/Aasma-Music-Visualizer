@@ -1,40 +1,35 @@
-import os, sys, glob, json, math, random, subprocess
+import os, sys, glob, json, random, subprocess, urllib.request, urllib.parse
 from io import BytesIO
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from google import genai
 from google.genai import types
 
 THEMES = {
     "romantic": {
-        "bg1": (16, 6, 28), "bg2": (52, 14, 48),
-        "neb1": (236, 72, 153), "neb2": (139, 92, 246),
-        "glow": "&H00B469FF", "wave1": "0xf472b6", "wave2": "0xc084fc",
-        "accent": "0xf472b6", "tint": (244, 114, 182)
+        "emoji": "🌹", "glow": "&H00B469FF", "w1": "0xf472b6", "w2": "0xfb7185",
+        "accent": "0xf472b6", "tint": (244, 114, 182),
+        "wiki": "blooming roses garden sunset nature landscape"
     },
     "sad": {
-        "bg1": (5, 10, 24), "bg2": (14, 24, 52),
-        "neb1": (56, 189, 248), "neb2": (99, 102, 241),
-        "glow": "&H00F8BD38", "wave1": "0x38bdf8", "wave2": "0x818cf8",
-        "accent": "0x38bdf8", "tint": (56, 189, 248)
+        "emoji": "🥀", "glow": "&H00F8BD38", "w1": "0x38bdf8", "w2": "0x818cf8",
+        "accent": "0x38bdf8", "tint": (56, 189, 248),
+        "wiki": "misty mountain lake forest rain nature landscape"
     },
     "sufi": {
-        "bg1": (12, 9, 22), "bg2": (38, 22, 42),
-        "neb1": (245, 158, 11), "neb2": (139, 92, 246),
-        "glow": "&H004BB6F5", "wave1": "0xfbbf24", "wave2": "0xa78bfa",
-        "accent": "0xfbbf24", "tint": (245, 158, 11)
+        "emoji": "🌙", "glow": "&H004BB6F5", "w1": "0xfbbf24", "w2": "0xf59e0b",
+        "accent": "0xfbbf24", "tint": (245, 158, 11),
+        "wiki": "golden sunset mountains river valley nature landscape"
     },
     "energetic": {
-        "bg1": (6, 12, 24), "bg2": (24, 10, 44),
-        "neb1": (34, 211, 238), "neb2": (217, 70, 239),
-        "glow": "&H00EED322", "wave1": "0x22d3ee", "wave2": "0xe879f9",
-        "accent": "0x22d3ee", "tint": (34, 211, 238)
+        "emoji": "🔥", "glow": "&H00EED322", "w1": "0x22d3ee", "w2": "0xe879f9",
+        "accent": "0x22d3ee", "tint": (34, 211, 238),
+        "wiki": "waterfall ocean waves sunrise dramatic nature landscape"
     },
     "lofi": {
-        "bg1": (9, 11, 26), "bg2": (26, 18, 46),
-        "neb1": (168, 85, 247), "neb2": (45, 212, 191),
-        "glow": "&H00F755A8", "wave1": "0x2dd4bf", "wave2": "0xc084fc",
-        "accent": "0x2dd4bf", "tint": (168, 85, 247)
+        "emoji": "🌿", "glow": "&H00A7F3D0", "w1": "0x34d399", "w2": "0x38bdf8",
+        "accent": "0x34d399", "tint": (52, 211, 153),
+        "wiki": "green pine forest stream flowers peaceful nature landscape"
     }
 }
 
@@ -57,9 +52,9 @@ def analyze_song_with_gemini(audio_path):
     prompt = (
         "Listen carefully to this entire song. "
         "1. Detect the primary mood from ONLY one of: romantic, sad, sufi, energetic, lofi. "
-        "2. Transcribe ALL sung lyrics into natural Hinglish (Hindi written in clean Roman English script, e.g., 'Khamoshiyan bhi ab kuch kehti hain'). "
-        "Break into short poetic lines (4 to 8 words max) with accurate start and end timestamps in seconds covering the whole song. "
-        "Return ONLY valid JSON: {\"mood\": \"sad\", \"lyrics\": [{\"start\": 2.0, \"end\": 5.5, \"text\": \"...\"}]}"
+        "2. Write a short cinematic nature photography prompt (12-18 words) matching the mood—strictly real Earth nature like misty mountains, forest, waterfall, blooming flowers, river, or sunset (NO space, NO text, NO people). "
+        "3. Transcribe ALL sung lyrics into natural Hinglish (Hindi in clean Roman script) broken into short lines (4-8 words) with accurate start and end timestamps in seconds. "
+        "Return ONLY valid JSON: {\"mood\": \"sad\", \"scene_prompt\": \"...\", \"lyrics\": [{\"start\": 2.0, \"end\": 5.5, \"text\": \"...\"}]}"
     )
     response = client.models.generate_content(
         model="gemini-2.5-flash",
@@ -73,92 +68,158 @@ def analyze_song_with_gemini(audio_path):
     mood = str(data.get("mood", "lofi")).lower().strip()
     if mood not in THEMES:
         mood = "lofi"
+    scene_prompt = str(data.get("scene_prompt", "")).strip() or f"cinematic 4k nature photography, {THEMES[mood]['wiki']}, soft atmospheric light, ultra detailed, no text"
     lyrics = data.get("lyrics", [])
-    print(f"Mood: {mood} | Extracted {len(lyrics)} lyric lines.")
-    for sample in lyrics[:3]:
-        print("  Sample:", sample)
-    return mood, lyrics
+    print(f"Mood: {mood} | Lines: {len(lyrics)} | Scene: {scene_prompt}")
+    return mood, scene_prompt, lyrics
 
-def generate_cinematic_bg(out_path, theme, photo_path=None, width=1600, height=900):
-    # Smooth gradient + organic sinusoidal nebula clouds via numpy
-    y_grid, x_grid = np.mgrid[0:height, 0:width].astype(np.float32)
-    yn = y_grid / height
-    xn = x_grid / width
+def download_image(url, timeout=22):
+    req = urllib.request.Request(url, headers={"User-Agent": "AasmaMusicStudio/4.0 (https://github.com/aasmaakumar-aasma)"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+    img = Image.open(BytesIO(data)).convert("RGB")
+    if img.width < 400 or img.height < 250:
+        raise ValueError("Image too small")
+    return img
 
-    bg = np.zeros((height, width, 3), dtype=np.float32)
-    for c in range(3):
-        bg[:, :, c] = theme["bg1"][c] * (1 - yn) + theme["bg2"][c] * yn
+def fetch_nature_background(scene_prompt, theme, width=1600, height=900):
+    # Tier 1: AI cinematic nature scene via Pollinations
+    try:
+        full_prompt = f"{scene_prompt}, cinematic nature photography, moody lighting, 8k, no text, no watermark"
+        seed = random.randint(1000, 99999)
+        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_prompt)}?width={width}&height={height}&nologo=true&seed={seed}"
+        print("Fetching AI nature scene...")
+        img = download_image(url, timeout=25)
+        return img.resize((width, height), Image.LANCZOS)
+    except Exception as e:
+        print("AI scene fallback:", e)
 
-    # Organic nebula layers
-    seed_off = random.uniform(0, 6.28)
-    cloud1 = np.sin(xn * 4.5 + seed_off) * np.cos(yn * 3.8 - seed_off) + np.sin((xn + yn) * 6.0) * 0.5
-    cloud1 = np.clip((cloud1 + 0.4) / 1.9, 0, 1) ** 2.2
+    # Tier 2: Real high-res nature photo from Wikimedia Commons
+    try:
+        q = urllib.parse.quote(f"filetype:bitmap {theme['wiki']}")
+        api = f"https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch={q}&gsrlimit=8&prop=imageinfo&iiprop=url&iiurlwidth={width}&format=json"
+        req = urllib.request.Request(api, headers={"User-Agent": "AasmaMusicStudio/4.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            res = json.loads(r.read().decode())
+        pages = list(res.get("query", {}).get("pages", {}).values())
+        random.shuffle(pages)
+        for p in pages:
+            info = p.get("imageinfo", [{}])[0]
+            img_url = info.get("thumburl") or info.get("url")
+            if img_url and any(img_url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
+                print("Fetching real nature photo from Wikimedia...")
+                img = download_image(img_url, timeout=20)
+                # Center crop to 16:9
+                target_ratio = width / height
+                cur_ratio = img.width / img.height
+                if cur_ratio > target_ratio:
+                    new_w = int(img.height * target_ratio)
+                    left = (img.width - new_w) // 2
+                    img = img.crop((left, 0, left + new_w, img.height))
+                else:
+                    new_h = int(img.width / target_ratio)
+                    top = (img.height - new_h) // 2
+                    img = img.crop((0, top, img.width, top + new_h))
+                return img.resize((width, height), Image.LANCZOS)
+    except Exception as e:
+        print("Wikimedia fallback:", e)
 
-    cloud2 = np.cos(xn * 5.2 - seed_off) * np.sin(yn * 4.2 + seed_off) + np.cos((xn - yn) * 5.5) * 0.5
-    cloud2 = np.clip((cloud2 + 0.3) / 1.8, 0, 1) ** 2.4
+    # Tier 3: Deep natural dusk fallback
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    for y in range(height):
+        t = y / height
+        arr[y, :] = [int(15 + 25*t), int(28 + 30*t), int(38 + 35*t)]
+    return Image.fromarray(arr, "RGB")
 
-    # Soft galaxy core glow in upper-center
-    dist = np.sqrt(((xn - 0.52) * 1.4) ** 2 + ((yn - 0.38) * 1.6) ** 2)
-    core = np.exp(-dist * 3.2)
+def build_background_and_thumbnail(bg_path, thumb_path, title, scene_prompt, theme, photo_path=None):
+    width, height = 1600, 900
+    img = fetch_nature_background(scene_prompt, theme, width, height).convert("RGBA")
 
-    for c in range(3):
-        bg[:, :, c] += cloud1 * theme["neb1"][c] * 0.42
-        bg[:, :, c] += cloud2 * theme["neb2"][c] * 0.38
-        bg[:, :, c] += core * (theme["neb1"][c] * 0.25 + 55)
+    # Cinematic dark grading + vignette so lyrics & bars pop clearly
+    dark_overlay = Image.new("RGBA", (width, height), (6, 10, 18, 125))
+    img = Image.alpha_composite(img, dark_overlay)
 
-    # Bottom atmospheric mist for visualizer depth
-    mist = np.clip((yn - 0.65) / 0.35, 0, 1) ** 2
-    for c in range(3):
-        bg[:, :, c] = bg[:, :, c] * (1 - mist * 0.45) + theme["neb2"][c] * (mist * 0.14)
-
-    img = Image.fromarray(np.clip(bg, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
-
-    # Optional custom portrait with auto-bg removal & natural sky blend
+    # Optional custom portrait blending
+    has_photo = False
     if photo_path and os.path.exists(photo_path):
         try:
             from rembg import remove
             with open(photo_path, "rb") as f:
                 cutout_bytes = remove(f.read())
             fg = Image.open(BytesIO(cutout_bytes)).convert("RGBA")
-            target_h = int(height * 0.80)
+            target_h = int(height * 0.78)
             ratio = target_h / fg.height
             fg = fg.resize((int(fg.width * ratio), target_h), Image.LANCZOS)
-            tint_layer = Image.new("RGBA", fg.size, (*theme["tint"], 65))
+            tint_layer = Image.new("RGBA", fg.size, (*theme["tint"], 55))
             fg = Image.alpha_composite(fg, tint_layer)
             r, g, b, a = fg.split()
             a_np = np.array(a, dtype=np.float32)
-            # Soft bottom fade so subject melts into the mist
-            fade = np.linspace(1.0, 0.0, fg.height).reshape(-1, 1)
-            fade = np.clip(fade * 2.2, 0, 1)
-            a_np = a_np * 0.34 * fade
-            fg.putalpha(Image.fromarray(a_np.astype(np.uint8)).filter(ImageFilter.GaussianBlur(2)))
-            pos = ((width - fg.width) // 2, height - fg.height + 15)
-            img.alpha_composite(fg, dest=pos)
+            fade = np.clip(np.linspace(1.0, 0.0, fg.height).reshape(-1, 1) * 2.2, 0, 1)
+            fg.putalpha(Image.fromarray((a_np * 0.38 * fade).astype(np.uint8)).filter(ImageFilter.GaussianBlur(2)))
+            img.alpha_composite(fg, dest=((width - fg.width) // 2, height - fg.height + 15))
+            has_photo = True
             print("Blended custom portrait:", photo_path)
         except Exception as e:
-            print("Portrait blend skipped:", e)
+            print("Portrait skipped:", e)
 
-    # Multi-scale glowing stars + subtle bokeh dust
-    stars = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(stars)
-    for _ in range(360):
-        x, y = random.randint(0, width - 1), random.randint(0, height - 1)
-        rad = random.choices([1, 2, 3, 4], weights=[60, 28, 9, 3])[0]
-        alpha = random.randint(70, 235)
-        col = random.choice([(255, 255, 255, alpha), (210, 235, 255, alpha), (*theme["tint"], alpha)])
-        sd.ellipse([x - rad, y - rad, x + rad, y + rad], fill=col)
-    img = Image.alpha_composite(img, stars.filter(ImageFilter.GaussianBlur(3)))
-    img = Image.alpha_composite(img, stars)
+    # Vignette
+    yn, xn = np.mgrid[0:height, 0:width].astype(np.float32)
+    vx = (xn / width - 0.5) * 2
+    vy = (yn / height - 0.5) * 2
+    vig = np.clip((vx**2 + vy**2) * 0.48, 0, 0.72)
+    arr = np.array(img.convert("RGB"), dtype=np.float32) * (1.0 - vig[:, :, None])
+    final_bg = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
+    final_bg.save(bg_path)
 
-    # Cinematic dark vignette
-    vx = (xn - 0.5) * 2
-    vy = (yn - 0.5) * 2
-    vig_mask = np.clip((vx ** 2 + vy ** 2) * 0.55, 0, 0.78)
-    arr = np.array(img.convert("RGB"), dtype=np.float32)
-    arr *= (1.0 - vig_mask[:, :, None])
-    Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB").save(out_path)
+    # Generate matching HD Thumbnail
+    thumb = final_bg.resize((1280, 720), Image.LANCZOS).convert("RGBA")
+    td = ImageDraw.Draw(thumb)
+    try:
+        f_title = ImageFont.truetype("/usr/share/fonts/truetype/lato/Lato-Bold.ttf", 74)
+        f_sub = ImageFont.truetype("/usr/share/fonts/truetype/lato/Lato-Bold.ttf", 28)
+    except Exception:
+        f_title = f_sub = ImageFont.load_default()
+    bbox = td.textbbox((0, 0), title, font=f_title)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    tx, ty = (1280 - tw) // 2, (720 - th) // 2 - 15
+    td.text((tx + 4, ty + 4), title, font=f_title, fill=(0, 0, 0, 180))
+    td.text((tx, ty), title, font=f_title, fill=(255, 255, 255, 245))
+    td.text((48, 36), "AASMA MUSIC", font=f_sub, fill=(*theme["tint"], 235))
+    thumb.convert("RGB").save(thumb_path, quality=92)
+    return has_photo
 
-def write_spotify_ass(lyrics, ass_path, theme):
+def generate_emoji_png(out_path, emoji_char, theme, has_photo):
+    if has_photo:
+        Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(out_path)
+        return
+    canvas = Image.new("RGBA", (180, 180), (0, 0, 0, 0))
+    # Soft glow aura behind emoji
+    aura = Image.new("RGBA", (180, 180), (0, 0, 0, 0))
+    ImageDraw.Draw(aura).ellipse([42, 42, 138, 138], fill=(*theme["tint"], 110))
+    canvas = Image.alpha_composite(canvas, aura.filter(ImageFilter.GaussianBlur(22)))
+    try:
+        efont = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf", 109)
+        d = ImageDraw.Draw(canvas)
+        bbox = d.textbbox((0, 0), emoji_char, font=efont)
+        ew, eh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        d.text(((180 - ew) // 2, (180 - eh) // 2 - 6), emoji_char, font=efont, embedded_color=True)
+    except Exception as e:
+        print("Emoji font fallback:", e)
+        d = ImageDraw.Draw(canvas)
+        d.ellipse([65, 65, 115, 115], fill=(*theme["tint"], 230))
+    canvas.save(out_path)
+
+def generate_thin_bar_mask(out_path, width=1160, height=115):
+    # Creates razor-sharp thin vertical bar slots (4px wide, 12px gap)
+    mask = Image.new("RGB", (width, height), (0, 0, 0))
+    d = ImageDraw.Draw(mask)
+    step = 14
+    bar_w = 4
+    for x in range(6, width - bar_w, step):
+        d.rectangle([x, 0, x + bar_w - 1, height], fill=(255, 255, 255))
+    mask.save(out_path)
+
+def write_3line_ass(lyrics, ass_path, theme):
     glow = theme["glow"]
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -167,8 +228,9 @@ PlayResY: 720
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Active,Lato,56,&H00FFFFFF,&H00FFFFFF,{glow},&H55000000,-1,0,0,0,100,100,0.8,0,1,2.2,1,5,80,80,40,1
-Style: NextLine,Lato,32,&H68E2E8F0,&H68E2E8F0,&H80000000,&H00000000,0,-1,0,0,100,100,0.5,0,1,1,0,5,100,100,40,1
+Style: PrevLine,Lato,28,&H90E2E8F0,&H90E2E8F0,&H90000000,&H00000000,0,0,0,0,100,100,0.4,0,1,1,0,5,100,100,40,1
+Style: Active,Lato,54,&H00FFFFFF,&H00FFFFFF,{glow},&H55000000,-1,0,0,0,100,100,0.8,0,1,2.2,1,5,80,80,40,1
+Style: NextLine,Lato,29,&H78E2E8F0,&H78E2E8F0,&H90000000,&H00000000,0,-1,0,0,100,100,0.4,0,1,1,0,5,100,100,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -181,15 +243,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if en <= st:
             en = st + 3.0
         txt = str(item["text"]).replace("\n", " ").strip()
+        if i > 0:
+            prev_txt = str(clean[i - 1]["text"]).replace("\n", " ").strip()
+            lines.append(
+                f"Dialogue: 0,{format_ass_time(st)},{format_ass_time(en)},PrevLine,,0,0,0,,"
+                f"{{\\pos(640,285)\\fad(260,260)}}{prev_txt}\n"
+            )
         lines.append(
             f"Dialogue: 1,{format_ass_time(st)},{format_ass_time(en)},Active,,0,0,0,,"
-            f"{{\\move(640,352,640,332,0,340)\\fad(300,300)\\blur2}}{txt}\n"
+            f"{{\\move(640,368,640,348,0,320)\\fad(280,280)\\blur2}}{txt}\n"
         )
         if i + 1 < len(clean):
-            nxt = str(clean[i + 1]["text"]).replace("\n", " ").strip()
+            nxt_txt = str(clean[i + 1]["text"]).replace("\n", " ").strip()
             lines.append(
                 f"Dialogue: 0,{format_ass_time(st)},{format_ass_time(en)},NextLine,,0,0,0,,"
-                f"{{\\pos(640,404)\\fad(320,260)}}{nxt}\n"
+                f"{{\\pos(640,415)\\fad(280,240)}}{nxt_txt}\n"
             )
     with open(ass_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
@@ -197,61 +265,74 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 def main():
     audio_path = sys.argv[1]
     out_mp4 = sys.argv[2]
+    out_thumb = sys.argv[3]
     title = os.path.splitext(os.path.basename(audio_path))[0].replace("_", " ").title()
     duration = get_audio_duration(audio_path)
 
     photos = glob.glob("input_photo/*")
     photo_path = photos[0] if photos else None
 
-    print("1/4 Analyzing song mood & Hinglish lyrics with Gemini...")
-    mood, lyrics = analyze_song_with_gemini(audio_path)
+    print("1/4 Analyzing song mood, nature scene & Hinglish lyrics...")
+    mood, scene_prompt, lyrics = analyze_song_with_gemini(audio_path)
     theme = THEMES[mood]
 
-    bg_path = "/tmp/cosmic_bg.png"
+    bg_path = "/tmp/nature_bg.png"
+    emoji_path = "/tmp/mood_emoji.png"
+    mask_path = "/tmp/bar_mask.png"
     ass_path = "/tmp/lyrics.ass"
 
-    print("2/4 Generating organic cosmic mood background...")
-    generate_cinematic_bg(bg_path, theme, photo_path)
+    print("2/4 Building nature background + HD thumbnail + pulsing emoji...")
+    has_photo = build_background_and_thumbnail(bg_path, out_thumb, title, scene_prompt, theme, photo_path)
+    generate_emoji_png(emoji_path, theme["emoji"], theme, has_photo)
+    generate_thin_bar_mask(mask_path)
 
-    print("3/4 Writing Spotify-style synced lyrics...")
-    write_spotify_ass(lyrics, ass_path, theme)
+    print("3/4 Writing 3-line Spotify-style synced lyrics...")
+    write_3line_ass(lyrics, ass_path, theme)
 
-    print("4/4 Rendering Cinematic Studio v3 MP4...")
+    print("4/4 Rendering Nature Studio v4 MP4...")
     fps = 25
     total_frames = max(1, int(duration * fps))
     safe_title = title.replace("'", "").replace(":", "")
 
     filter_complex = (
-        # Smooth cinematic zoom-out with gentle drift
+        # Smooth cinematic zoom-out on real nature background
         f"[0:v]zoompan=z='max(1.0,1.18-0.18*(in/{total_frames}))':"
-        f"x='iw/2-(iw/zoom/2)+sin(in/45)*6':y='ih/2-(ih/zoom/2)+cos(in/55)*4':"
-        f"d=1:s=1280x720:fps={fps}[bg];"
-        # Dual-layer glowing mirror waveform (smooth & natural)
-        f"[1:a]showwaves=s=1180x115:mode=cline:rate={fps}:colors={theme['wave1']}@0.9|{theme['wave2']}@0.75:scale=sqrt,format=rgba,split=2[w_sharp][w_glow_src];"
-        f"[w_glow_src]gblur=sigma=7[w_glow];"
-        f"[bg][w_glow]overlay=50:555:shortest=1[bg1];"
-        f"[bg1][w_sharp]overlay=50:555:shortest=1,"
-        # Synced Spotify-style lyrics
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1280x720:fps={fps}[bg];"
+        # Pulsing heartbeat mood emoji (only visible if no custom photo)
+        f"[2:v]format=rgba,scale=w='trunc(125*(1+0.13*abs(sin(t*3.2)))/2)*2':h=-1:eval=frame[em];"
+        f"[bg][em]overlay=x='(W-w)/2':y='165-(h/2)':shortest=1[bg_em];"
+        # Thin vertical bottom-to-top neon equalizer bars
+        f"[1:a]showfreqs=s=145x115:mode=bar:ascale=sqrt:fscale=log:colors={theme['w1']}|{theme['w2']}:win_size=1024:averaging=3,"
+        f"fps={fps},scale=1160:115:flags=neighbor,format=rgb24[eq_raw];"
+        f"[3:v]format=rgb24[mask_rgb];"
+        f"[eq_raw][mask_rgb]blend=all_mode=multiply:shortest=1,colorkey=0x000000:0.06:0.06,format=rgba,split=2[eq_sharp][eq_g];"
+        f"[eq_g]gblur=sigma=5[eq_glow];"
+        f"[bg_em][eq_glow]overlay=60:565:shortest=1[bg1];"
+        f"[bg1][eq_sharp]overlay=60:565:shortest=1,"
+        # 3-line Spotify lyrics
         f"ass={ass_path},"
-        # Clean, minimal top-corner titles (no broken icons or heavy boxes)
-        f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='{safe_title}':fontcolor=white@0.88:fontsize=24:x=44:y=34:shadowcolor=black@0.6:shadowx=2:shadowy=2,"
-        f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='AASMA MUSIC':fontcolor={theme['accent']}@0.92:fontsize=22:x=w-tw-44:y=35:shadowcolor=black@0.6:shadowx=2:shadowy=2,"
-        # Sleek glowing progress bar at bottom
-        f"drawbox=x=50:y=694:w=1180:h=3:color=white@0.18:t=fill,"
-        f"drawbox=x=50:y=694:w='1180*t/{duration}':h=3:color={theme['accent']}@0.95:t=fill,"
+        # Clean top corners
+        f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='{safe_title}':fontcolor=white@0.9:fontsize=24:x=44:y=34:shadowcolor=black@0.7:shadowx=2:shadowy=2,"
+        f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='AASMA MUSIC':fontcolor={theme['accent']}@0.95:fontsize=22:x=w-tw-44:y=35:shadowcolor=black@0.7:shadowx=2:shadowy=2,"
+        # Sleek progress bar
+        f"drawbox=x=60:y=694:w=1160:h=3:color=white@0.20:t=fill,"
+        f"drawbox=x=60:y=694:w='1160*t/{duration}':h=3:color={theme['accent']}@0.95:t=fill,"
         f"format=yuv420p[v]"
     )
 
     cmd = [
-        "ffmpeg", "-y", "-loop", "1", "-r", str(fps), "-i", bg_path,
+        "ffmpeg", "-y",
+        "-loop", "1", "-r", str(fps), "-i", bg_path,
         "-i", audio_path,
+        "-loop", "1", "-r", str(fps), "-i", emoji_path,
+        "-loop", "1", "-r", str(fps), "-i", mask_path,
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4
     ]
     subprocess.run(cmd, check=True)
-    print("Done:", out_mp4)
+    print("Done:", out_mp4, "| Thumbnail:", out_thumb)
 
 if __name__ == "__main__":
     main()
