@@ -1,0 +1,32 @@
+name: Drive Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  upload-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install rclone
+        run: sudo apt-get update && sudo apt-get install -y rclone
+
+      - name: Configure rclone from secret
+        env:
+          RCLONE_CONFIG_DATA: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf "%s\n" "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Upload smoke test file safely (no delete)
+        run: |
+          mkdir -p /tmp/gh_aasma_test
+          echo "Cloud runner upload check - $(date -u)" > /tmp/gh_aasma_test/cloud_check.txt
+          rclone copy /tmp/gh_aasma_test/cloud_check.txt aasma_cloud:Aasma-Music-Visualizer/cloud-checks/
+          rclone ls aasma_cloud:Aasma-Music-Visualizer/cloud-checks/
