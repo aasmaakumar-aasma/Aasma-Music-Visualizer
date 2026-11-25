@@ -7,6 +7,7 @@ on:
       - 'input_audio/*.mp3'
       - 'input_audio/*.m4a'
       - 'input_audio/*.wav'
+      - 'input_photo/*'
 
 permissions:
   contents: read
@@ -21,8 +22,8 @@ jobs:
       - name: Install ffmpeg, rclone, fonts and Python libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg rclone fonts-dejavu-core python3-pip
-          pip install --break-system-packages google-genai pillow
+          sudo apt-get install -y ffmpeg rclone fonts-lato fonts-dejavu-core python3-pip
+          pip install --break-system-packages google-genai pillow rembg onnxruntime
 
       - name: Configure rclone from secret
         env:
@@ -32,14 +33,14 @@ jobs:
           printf "%s\n" "$RCLONE_CONFIG_DATA" > ~/.config/rclone/rclone.conf
           chmod 600 ~/.config/rclone/rclone.conf
 
-      - name: Render Hinglish Lyrics + Universe Visualizer MP4
+      - name: Render Pro Studio Lyrics + Mood Visualizer MP4
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           mkdir -p /tmp/aasma_out
           AUDIO_FILE=$(ls -t input_audio/* | head -n 1)
           BASE_NAME=$(basename "${AUDIO_FILE%.*}")
-          python3 render_lyrics.py "$AUDIO_FILE" "/tmp/aasma_out/${BASE_NAME}_universe_lyrics.mp4"
+          python3 render_lyrics.py "$AUDIO_FILE" "/tmp/aasma_out/${BASE_NAME}_pro_studio.mp4"
 
       - name: Upload video safely to Google Drive
         run: |
