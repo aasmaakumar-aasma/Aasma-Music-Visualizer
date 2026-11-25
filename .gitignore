@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.env
+secrets.json
+*.mp3
+*.wav
+*.mp4
+*.jpg
+*.png
