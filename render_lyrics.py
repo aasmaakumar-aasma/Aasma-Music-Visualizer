@@ -44,7 +44,7 @@ def generate_universe_bg(out_path, width=1440, height=810):
     img.save(out_path)
 
 def extract_hinglish_lyrics(audio_path):
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"], http_options={"api_version": "v1beta"})
     audio_file = client.files.upload(file=audio_path)
     prompt = (
         "Listen carefully to this song and transcribe all sung lyrics into natural Hinglish "
