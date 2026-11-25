@@ -1,0 +1,27 @@
+name: Aasma Cloud Runner Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Project
+        uses: actions/checkout@v4
+
+      - name: Check Python
+        run: python3 --version
+
+      - name: Check FFmpeg
+        run: ffmpeg -version | head -n 1
+
+      - name: Check Cloud Resources
+        run: |
+          nproc
+          free -h
+          df -h .
+          echo "Aasma Cloud Runner is Ready!"
