@@ -97,12 +97,27 @@ def analyze_and_sync_lyrics(audio_path):
             "Return ONLY valid JSON: {\"mood\": \"sad\", \"scene_prompt\": \"...\", \"lyrics\": [{\"start\": 2.0, \"end\": 5.5, \"text\": \"...\"}]}"
         )
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[audio_file, prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json")
-    )
-    text = response.text.strip()
+    import time
+    text = None
+    for model_name in ["gemini-2.5-flash", "gemini-2.5-flash", "gemini-2.0-flash"]:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[audio_file, prompt],
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            text = response.text.strip()
+            break
+        except Exception as e:
+            print(f"Gemini {model_name} busy ({e}), retrying...")
+            time.sleep(5)
+    if not text:
+        fallback_lyrics = [
+            {"start": round(float(seg.get("start", 0)), 2), "end": round(float(seg.get("end", 0)), 2), "text": str(seg.get("text", "")).strip()}
+            for seg in (groq_data["segments"] if groq_data and groq_data.get("segments") else [])
+            if str(seg.get("text", "")).strip()
+        ]
+        text = json.dumps({"mood": "sad", "scene_prompt": "misty mountain lake forest rain nature landscape", "lyrics": fallback_lyrics})
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     data = json.loads(text)
