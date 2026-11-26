@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from google import genai
 from google.genai import types
+from groq import Groq
 
 THEMES = {
     "romantic": {
@@ -46,16 +47,56 @@ def format_ass_time(seconds):
     cs = int((seconds - int(seconds)) * 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-def analyze_song_with_gemini(audio_path):
+def transcribe_with_groq(audio_path):
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return None
+    try:
+        client = Groq(api_key=api_key)
+        with open(audio_path, "rb") as f:
+            tr = client.audio.transcriptions.create(
+                file=(os.path.basename(audio_path), f.read()),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+                timestamp_granularities=["word", "segment"]
+            )
+        raw = tr.model_dump() if hasattr(tr, "model_dump") else dict(tr)
+        segments = raw.get("segments") or []
+        words = raw.get("words") or []
+        print(f"Groq Whisper extracted {len(segments)} segments and {len(words)} words.")
+        return {"segments": segments, "words": words}
+    except Exception as e:
+        print("Groq Whisper fallback:", e)
+        return None
+
+def analyze_and_sync_lyrics(audio_path):
+    groq_data = transcribe_with_groq(audio_path)
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"], http_options={"api_version": "v1beta"})
     audio_file = client.files.upload(file=audio_path)
-    prompt = (
-        "Listen carefully to this entire song. "
-        "1. Detect the primary mood from ONLY one of: romantic, sad, sufi, energetic, lofi. "
-        "2. Write a short cinematic nature photography prompt (12-18 words) matching the mood—strictly real Earth nature like misty mountains, forest, waterfall, blooming flowers, river, or sunset (NO space, NO text, NO people). "
-        "3. Transcribe ALL sung lyrics into natural Hinglish (Hindi in clean Roman script) broken into short lines (4-8 words) with accurate start and end timestamps in seconds. "
-        "Return ONLY valid JSON: {\"mood\": \"sad\", \"scene_prompt\": \"...\", \"lyrics\": [{\"start\": 2.0, \"end\": 5.5, \"text\": \"...\"}]}"
-    )
+
+    if groq_data and groq_data["segments"]:
+        compact_segs = [
+            {"start": round(float(s.get("start", 0)), 2), "end": round(float(s.get("end", 0)), 2), "text": str(s.get("text", "")).strip()}
+            for s in groq_data["segments"] if str(s.get("text", "")).strip()
+        ]
+        prompt = (
+            "You are given the song audio AND exact Whisper timestamped segments below. "
+            "1. Detect the primary mood from ONLY one of: romantic, sad, sufi, energetic, lofi. "
+            "2. Write a short cinematic real-Earth nature photography prompt (12-18 words) matching the mood (e.g. misty mountains, forest, waterfall, flowers, sunset; NO space, NO text, NO people). "
+            "3. Convert every single segment into clean, natural Hinglish (Hindi written in Roman script, e.g. 'Khamoshiyan bhi ab kuch kehti hain'). "
+            "Keep the exact start/end timestamps from Whisper (split any very long segment >9 words into 2 balanced lines with proportional timestamps). Do NOT skip any sung line. "
+            f"Whisper segments:\n{json.dumps(compact_segs, ensure_ascii=False)}\n"
+            "Return ONLY valid JSON: {\"mood\": \"sad\", \"scene_prompt\": \"...\", \"lyrics\": [{\"start\": 2.0, \"end\": 5.5, \"text\": \"...\"}]}"
+        )
+    else:
+        prompt = (
+            "Listen carefully to this entire song. "
+            "1. Detect the primary mood from ONLY one of: romantic, sad, sufi, energetic, lofi. "
+            "2. Write a short cinematic real-Earth nature photography prompt (12-18 words) matching the mood (NO space, NO text, NO people). "
+            "3. Transcribe ALL sung lyrics into natural Hinglish (Roman script) broken into short lines (4-8 words) with accurate start and end timestamps in seconds. "
+            "Return ONLY valid JSON: {\"mood\": \"sad\", \"scene_prompt\": \"...\", \"lyrics\": [{\"start\": 2.0, \"end\": 5.5, \"text\": \"...\"}]}"
+        )
+
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[audio_file, prompt],
@@ -68,13 +109,30 @@ def analyze_song_with_gemini(audio_path):
     mood = str(data.get("mood", "lofi")).lower().strip()
     if mood not in THEMES:
         mood = "lofi"
-    scene_prompt = str(data.get("scene_prompt", "")).strip() or f"cinematic 4k nature photography, {THEMES[mood]['wiki']}, soft atmospheric light, ultra detailed, no text"
-    lyrics = data.get("lyrics", [])
-    print(f"Mood: {mood} | Lines: {len(lyrics)} | Scene: {scene_prompt}")
+    scene_prompt = str(data.get("scene_prompt", "")).strip() or f"cinematic 4k nature photography, {THEMES[mood]['wiki']}, soft atmospheric light, no text"
+    lyrics = sanitize_lyrics(data.get("lyrics", []))
+    print(f"Mood: {mood} | Final synced lines: {len(lyrics)}")
     return mood, scene_prompt, lyrics
 
+def sanitize_lyrics(raw_lyrics):
+    clean = []
+    for item in raw_lyrics:
+        txt = str(item.get("text", "")).replace("\n", " ").replace("{", "").replace("}", "").strip()
+        if not txt:
+            continue
+        st = max(0.0, float(item.get("start", 0)))
+        en = float(item.get("end", st + 3.0))
+        if en <= st + 0.3:
+            en = st + 2.8
+        clean.append({"start": st, "end": en, "text": txt})
+    clean.sort(key=lambda x: x["start"])
+    for i in range(len(clean) - 1):
+        if clean[i]["end"] > clean[i + 1]["start"]:
+            clean[i]["end"] = max(clean[i]["start"] + 0.4, clean[i + 1]["start"] - 0.05)
+    return clean
+
 def download_image(url, timeout=22):
-    req = urllib.request.Request(url, headers={"User-Agent": "AasmaMusicStudio/4.0 (https://github.com/aasmaakumar-aasma)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "AasmaMusicStudio/5.0 (https://github.com/aasmaakumar-aasma)"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read()
     img = Image.open(BytesIO(data)).convert("RGB")
@@ -83,22 +141,19 @@ def download_image(url, timeout=22):
     return img
 
 def fetch_nature_background(scene_prompt, theme, width=1600, height=900):
-    # Tier 1: AI cinematic nature scene via Pollinations
     try:
         full_prompt = f"{scene_prompt}, cinematic nature photography, moody lighting, 8k, no text, no watermark"
         seed = random.randint(1000, 99999)
         url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_prompt)}?width={width}&height={height}&nologo=true&seed={seed}"
         print("Fetching AI nature scene...")
-        img = download_image(url, timeout=25)
-        return img.resize((width, height), Image.LANCZOS)
+        return download_image(url, timeout=25).resize((width, height), Image.LANCZOS)
     except Exception as e:
         print("AI scene fallback:", e)
 
-    # Tier 2: Real high-res nature photo from Wikimedia Commons
     try:
         q = urllib.parse.quote(f"filetype:bitmap {theme['wiki']}")
         api = f"https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch={q}&gsrlimit=8&prop=imageinfo&iiprop=url&iiurlwidth={width}&format=json"
-        req = urllib.request.Request(api, headers={"User-Agent": "AasmaMusicStudio/4.0"})
+        req = urllib.request.Request(api, headers={"User-Agent": "AasmaMusicStudio/5.0"})
         with urllib.request.urlopen(req, timeout=15) as r:
             res = json.loads(r.read().decode())
         pages = list(res.get("query", {}).get("pages", {}).values())
@@ -107,9 +162,7 @@ def fetch_nature_background(scene_prompt, theme, width=1600, height=900):
             info = p.get("imageinfo", [{}])[0]
             img_url = info.get("thumburl") or info.get("url")
             if img_url and any(img_url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png"]):
-                print("Fetching real nature photo from Wikimedia...")
                 img = download_image(img_url, timeout=20)
-                # Center crop to 16:9
                 target_ratio = width / height
                 cur_ratio = img.width / img.height
                 if cur_ratio > target_ratio:
@@ -124,7 +177,6 @@ def fetch_nature_background(scene_prompt, theme, width=1600, height=900):
     except Exception as e:
         print("Wikimedia fallback:", e)
 
-    # Tier 3: Deep natural dusk fallback
     arr = np.zeros((height, width, 3), dtype=np.uint8)
     for y in range(height):
         t = y / height
@@ -134,12 +186,8 @@ def fetch_nature_background(scene_prompt, theme, width=1600, height=900):
 def build_background_and_thumbnail(bg_path, thumb_path, title, scene_prompt, theme, photo_path=None):
     width, height = 1600, 900
     img = fetch_nature_background(scene_prompt, theme, width, height).convert("RGBA")
+    img = Image.alpha_composite(img, Image.new("RGBA", (width, height), (6, 10, 18, 128)))
 
-    # Cinematic dark grading + vignette so lyrics & bars pop clearly
-    dark_overlay = Image.new("RGBA", (width, height), (6, 10, 18, 125))
-    img = Image.alpha_composite(img, dark_overlay)
-
-    # Optional custom portrait blending
     has_photo = False
     if photo_path and os.path.exists(photo_path):
         try:
@@ -150,19 +198,16 @@ def build_background_and_thumbnail(bg_path, thumb_path, title, scene_prompt, the
             target_h = int(height * 0.78)
             ratio = target_h / fg.height
             fg = fg.resize((int(fg.width * ratio), target_h), Image.LANCZOS)
-            tint_layer = Image.new("RGBA", fg.size, (*theme["tint"], 55))
-            fg = Image.alpha_composite(fg, tint_layer)
+            fg = Image.alpha_composite(fg, Image.new("RGBA", fg.size, (*theme["tint"], 55)))
             r, g, b, a = fg.split()
             a_np = np.array(a, dtype=np.float32)
             fade = np.clip(np.linspace(1.0, 0.0, fg.height).reshape(-1, 1) * 2.2, 0, 1)
             fg.putalpha(Image.fromarray((a_np * 0.38 * fade).astype(np.uint8)).filter(ImageFilter.GaussianBlur(2)))
             img.alpha_composite(fg, dest=((width - fg.width) // 2, height - fg.height + 15))
             has_photo = True
-            print("Blended custom portrait:", photo_path)
         except Exception as e:
             print("Portrait skipped:", e)
 
-    # Vignette
     yn, xn = np.mgrid[0:height, 0:width].astype(np.float32)
     vx = (xn / width - 0.5) * 2
     vy = (yn / height - 0.5) * 2
@@ -171,7 +216,6 @@ def build_background_and_thumbnail(bg_path, thumb_path, title, scene_prompt, the
     final_bg = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
     final_bg.save(bg_path)
 
-    # Generate matching HD Thumbnail
     thumb = final_bg.resize((1280, 720), Image.LANCZOS).convert("RGBA")
     td = ImageDraw.Draw(thumb)
     try:
@@ -193,7 +237,6 @@ def generate_emoji_png(out_path, emoji_char, theme, has_photo):
         Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(out_path)
         return
     canvas = Image.new("RGBA", (180, 180), (0, 0, 0, 0))
-    # Soft glow aura behind emoji
     aura = Image.new("RGBA", (180, 180), (0, 0, 0, 0))
     ImageDraw.Draw(aura).ellipse([42, 42, 138, 138], fill=(*theme["tint"], 110))
     canvas = Image.alpha_composite(canvas, aura.filter(ImageFilter.GaussianBlur(22)))
@@ -203,23 +246,30 @@ def generate_emoji_png(out_path, emoji_char, theme, has_photo):
         bbox = d.textbbox((0, 0), emoji_char, font=efont)
         ew, eh = bbox[2] - bbox[0], bbox[3] - bbox[1]
         d.text(((180 - ew) // 2, (180 - eh) // 2 - 6), emoji_char, font=efont, embedded_color=True)
-    except Exception as e:
-        print("Emoji font fallback:", e)
-        d = ImageDraw.Draw(canvas)
-        d.ellipse([65, 65, 115, 115], fill=(*theme["tint"], 230))
+    except Exception:
+        ImageDraw.Draw(canvas).ellipse([65, 65, 115, 115], fill=(*theme["tint"], 230))
     canvas.save(out_path)
 
 def generate_thin_bar_mask(out_path, width=1160, height=115):
-    # Creates razor-sharp thin vertical bar slots (4px wide, 12px gap)
     mask = Image.new("RGB", (width, height), (0, 0, 0))
     d = ImageDraw.Draw(mask)
-    step = 14
-    bar_w = 4
-    for x in range(6, width - bar_w, step):
-        d.rectangle([x, 0, x + bar_w - 1, height], fill=(255, 255, 255))
+    for x in range(6, width - 4, 14):
+        d.rectangle([x, 0, x + 3, height], fill=(255, 255, 255))
     mask.save(out_path)
 
-def write_3line_ass(lyrics, ass_path, theme):
+def build_karaoke_text(text, duration_sec):
+    words = text.split()
+    if not words:
+        return text
+    total_cs = max(30, int(duration_sec * 100))
+    total_chars = sum(len(w) for w in words) or 1
+    out = []
+    for w in words:
+        w_cs = max(8, int(total_cs * (len(w) / total_chars)))
+        out.append(f"{{\\kf{w_cs}}}{w}")
+    return " ".join(out)
+
+def write_karaoke_3line_ass(lyrics, ass_path, theme, total_duration):
     glow = theme["glow"]
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -229,36 +279,46 @@ PlayResY: 720
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: PrevLine,Lato,28,&H90E2E8F0,&H90E2E8F0,&H90000000,&H00000000,0,0,0,0,100,100,0.4,0,1,1,0,5,100,100,40,1
-Style: Active,Lato,54,&H00FFFFFF,&H00FFFFFF,{glow},&H55000000,-1,0,0,0,100,100,0.8,0,1,2.2,1,5,80,80,40,1
+Style: Active,Lato,54,&H00FFFFFF,&H68CBD5E1,{glow},&H55000000,-1,0,0,0,100,100,0.8,0,1,2.2,1,5,80,80,40,1
 Style: NextLine,Lato,29,&H78E2E8F0,&H78E2E8F0,&H90000000,&H00000000,0,-1,0,0,100,100,0.4,0,1,1,0,5,100,100,40,1
+Style: GapDots,Lato,36,&H55FFFFFF,&H55FFFFFF,{glow},&H00000000,-1,0,0,0,100,100,6,0,1,1.5,0,5,80,80,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header]
-    clean = [x for x in lyrics if str(x.get("text", "")).strip()]
-    for i, item in enumerate(clean):
-        st = float(item.get("start", 0))
-        en = float(item.get("end", st + 3.5))
-        if en <= st:
-            en = st + 3.0
-        txt = str(item["text"]).replace("\n", " ").strip()
+    prev_end = 0.0
+    for i, item in enumerate(lyrics):
+        st, en, txt = item["start"], item["end"], item["text"]
+        # Instrumental gap indicator if > 4.5s silence/music
+        if st - prev_end >= 4.5:
+            g_st, g_en = prev_end + 0.6, st - 0.6
+            lines.append(
+                f"Dialogue: 0,{format_ass_time(g_st)},{format_ass_time(g_en)},GapDots,,0,0,0,,"
+                f"{{\\pos(640,348)\\fad(500,500)\\blur2}}•  •  •\n"
+            )
         if i > 0:
-            prev_txt = str(clean[i - 1]["text"]).replace("\n", " ").strip()
             lines.append(
                 f"Dialogue: 0,{format_ass_time(st)},{format_ass_time(en)},PrevLine,,0,0,0,,"
-                f"{{\\pos(640,285)\\fad(260,260)}}{prev_txt}\n"
+                f"{{\\pos(640,285)\\fad(240,240)}}{lyrics[i - 1]['text']}\n"
             )
+        k_txt = build_karaoke_text(txt, en - st)
         lines.append(
             f"Dialogue: 1,{format_ass_time(st)},{format_ass_time(en)},Active,,0,0,0,,"
-            f"{{\\move(640,368,640,348,0,320)\\fad(280,280)\\blur2}}{txt}\n"
+            f"{{\\move(640,366,640,348,0,280)\\fad(220,220)\\blur1.5}}{k_txt}\n"
         )
-        if i + 1 < len(clean):
-            nxt_txt = str(clean[i + 1]["text"]).replace("\n", " ").strip()
+        if i + 1 < len(lyrics):
             lines.append(
                 f"Dialogue: 0,{format_ass_time(st)},{format_ass_time(en)},NextLine,,0,0,0,,"
-                f"{{\\pos(640,415)\\fad(280,240)}}{nxt_txt}\n"
+                f"{{\\pos(640,415)\\fad(240,220)}}{lyrics[i + 1]['text']}\n"
             )
+        prev_end = en
+
+    if total_duration - prev_end >= 4.5:
+        lines.append(
+            f"Dialogue: 0,{format_ass_time(prev_end + 0.6)},{format_ass_time(total_duration - 0.5)},GapDots,,0,0,0,,"
+            f"{{\\pos(640,348)\\fad(500,500)\\blur2}}•  •  •\n"
+        )
     with open(ass_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
@@ -272,8 +332,8 @@ def main():
     photos = glob.glob("input_photo/*")
     photo_path = photos[0] if photos else None
 
-    print("1/4 Analyzing song mood, nature scene & Hinglish lyrics...")
-    mood, scene_prompt, lyrics = analyze_song_with_gemini(audio_path)
+    print("1/4 Transcribing with Groq Whisper v3 + Hinglish Karaoke Sync...")
+    mood, scene_prompt, lyrics = analyze_and_sync_lyrics(audio_path)
     theme = THEMES[mood]
 
     bg_path = "/tmp/nature_bg.png"
@@ -286,22 +346,19 @@ def main():
     generate_emoji_png(emoji_path, theme["emoji"], theme, has_photo)
     generate_thin_bar_mask(mask_path)
 
-    print("3/4 Writing 3-line Spotify-style synced lyrics...")
-    write_3line_ass(lyrics, ass_path, theme)
+    print("3/4 Writing 3-line Word-by-Word Karaoke ASS...")
+    write_karaoke_3line_ass(lyrics, ass_path, theme, duration)
 
-    print("4/4 Rendering Nature Studio v4 MP4...")
+    print("4/4 Rendering Karaoke Nature Studio v5 MP4...")
     fps = 25
     total_frames = max(1, int(duration * fps))
     safe_title = title.replace("'", "").replace(":", "")
 
     filter_complex = (
-        # Smooth cinematic zoom-out on real nature background
         f"[0:v]zoompan=z='max(1.0,1.18-0.18*(in/{total_frames}))':"
         f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1280x720:fps={fps}[bg];"
-        # Pulsing heartbeat mood emoji (only visible if no custom photo)
         f"[2:v]format=rgba,scale=w='trunc(125*(1+0.13*abs(sin(t*3.2)))/2)*2':h=-1:eval=frame[em];"
         f"[bg][em]overlay=x='(W-w)/2':y='165-(h/2)':shortest=1[bg_em];"
-        # Thin vertical bottom-to-top neon equalizer bars
         f"[1:a]showfreqs=s=145x115:mode=bar:ascale=sqrt:fscale=log:colors={theme['w1']}|{theme['w2']}:win_size=1024:averaging=3,"
         f"fps={fps},scale=1160:115:flags=neighbor,format=rgb24[eq_raw];"
         f"[3:v]format=rgb24[mask_rgb];"
@@ -309,12 +366,9 @@ def main():
         f"[eq_g]gblur=sigma=5[eq_glow];"
         f"[bg_em][eq_glow]overlay=60:565:shortest=1[bg1];"
         f"[bg1][eq_sharp]overlay=60:565:shortest=1,"
-        # 3-line Spotify lyrics
         f"ass={ass_path},"
-        # Clean top corners
         f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='{safe_title}':fontcolor=white@0.9:fontsize=24:x=44:y=34:shadowcolor=black@0.7:shadowx=2:shadowy=2,"
         f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='AASMA MUSIC':fontcolor={theme['accent']}@0.95:fontsize=22:x=w-tw-44:y=35:shadowcolor=black@0.7:shadowx=2:shadowy=2,"
-        # Sleek progress bar
         f"drawbox=x=60:y=694:w=1160:h=3:color=white@0.20:t=fill,"
         f"drawbox=x=60:y=694:w='1160*t/{duration}':h=3:color={theme['accent']}@0.95:t=fill,"
         f"format=yuv420p[v]"
