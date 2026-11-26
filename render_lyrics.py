@@ -355,17 +355,14 @@ def main():
     safe_title = title.replace("'", "").replace(":", "")
 
     filter_complex = (
-        f"[0:v]zoompan=z='max(1.0,1.18-0.18*(in/{total_frames}))':"
-        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1280x720:fps={fps}[bg];"
-        f"[2:v]format=rgba,scale=w='trunc(125*(1+0.13*abs(sin(t*3.2)))/2)*2':h=-1:eval=frame[em];"
-        f"[bg][em]overlay=x='(W-w)/2':y='165-(h/2)':shortest=1[bg_em];"
+        f"[0:v]scale=1280:720,format=rgba[bg];"
+        f"[2:v]scale=130:-1,format=rgba[em];"
+        f"[bg][em]overlay=x='(W-w)/2':y='155-(h/2)+sin(t*3.2)*6':shortest=1[bg_em];"
         f"[1:a]showfreqs=s=145x115:mode=bar:ascale=sqrt:fscale=log:colors={theme['w1']}|{theme['w2']}:win_size=1024:averaging=3,"
         f"fps={fps},scale=1160:115:flags=neighbor,format=rgb24[eq_raw];"
         f"[3:v]format=rgb24[mask_rgb];"
-        f"[eq_raw][mask_rgb]blend=all_mode=multiply:shortest=1,colorkey=0x000000:0.06:0.06,format=rgba,split=2[eq_sharp][eq_g];"
-        f"[eq_g]gblur=sigma=5[eq_glow];"
-        f"[bg_em][eq_glow]overlay=60:565:shortest=1[bg1];"
-        f"[bg1][eq_sharp]overlay=60:565:shortest=1,"
+        f"[eq_raw][mask_rgb]blend=all_mode=multiply:shortest=1,colorkey=0x000000:0.06:0.06,format=rgba[eq_sharp];"
+        f"[bg_em][eq_sharp]overlay=60:565:shortest=1,"
         f"ass={ass_path},"
         f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='{safe_title}':fontcolor=white@0.9:fontsize=24:x=44:y=34:shadowcolor=black@0.7:shadowx=2:shadowy=2,"
         f"drawtext=fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:text='AASMA MUSIC':fontcolor={theme['accent']}@0.95:fontsize=22:x=w-tw-44:y=35:shadowcolor=black@0.7:shadowx=2:shadowy=2,"
@@ -382,7 +379,7 @@ def main():
         "-loop", "1", "-r", str(fps), "-i", mask_path,
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
         "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4
     ]
     subprocess.run(cmd, check=True)

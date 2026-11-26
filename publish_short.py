@@ -118,8 +118,8 @@ def main():
     safe_title = title.replace("'", "").replace(":", "")
 
     filter_complex = (
-        f"[0:v]zoompan=z='max(1.0,1.16-0.16*(in/{total_frames}))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=720x1280:fps={fps}[bg];"
-        f"[2:v]format=rgba,scale=w='trunc(120*(1+0.13*abs(sin(t*3.2)))/2)*2':h=-1:eval=frame[em];"
+        f"[0:v]scale=720:1280,format=rgba[bg];"
+        f"[2:v]scale=125:-1,format=rgba[em];"
         f"[bg][em]overlay=x='(W-w)/2':y='390-(h/2)':shortest=1[bg_em];"
         f"[1:a]showfreqs=s=120x110:mode=bar:ascale=sqrt:fscale=log:colors={theme['w1']}|{theme['w2']}:win_size=1024:averaging=3,"
         f"fps={fps},scale=640:110:flags=neighbor,format=rgb24[eq_raw];"
@@ -144,7 +144,7 @@ def main():
         "-loop", "1", "-r", str(fps), "-i", mask_916,
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "1:a",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "21",
         "-c:a", "aac", "-b:a", "192k", "-t", str(short_dur), short_mp4
     ]
     subprocess.run(cmd, check=True)
