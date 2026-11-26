@@ -386,6 +386,14 @@ def main():
         "-c:a", "aac", "-b:a", "192k", "-shortest", out_mp4
     ]
     subprocess.run(cmd, check=True)
+    meta = {
+        "audio_path": audio_path, "thumb_path": out_thumb, "title": title,
+        "mood": mood, "theme": theme, "lyrics": lyrics, "duration": duration,
+        "short_start": lyrics[min(len(lyrics)//3, len(lyrics)-1)]["start"] if lyrics else min(20.0, duration*0.25),
+        "short_end": (lyrics[min(len(lyrics)//3, len(lyrics)-1)]["start"] + 52.0) if lyrics else min(72.0, duration)
+    }
+    with open("/tmp/aasma_meta.json", "w", encoding="utf-8") as mf:
+        json.dump(meta, mf, ensure_ascii=False)
     print("Done:", out_mp4, "| Thumbnail:", out_thumb)
 
 if __name__ == "__main__":
